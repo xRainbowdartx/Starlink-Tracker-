@@ -1,0 +1,9 @@
+sgp4>=2.23
+skyfield>=1.49
+click>=8.1
+requests>=2.32
+# Required by the dashboard / viz layer; listed here so Streamlit Community
+# Cloud installs them automatically when deploying.
+plotly>=5.20
+streamlit>=1.32
+mapbox-earcut>=1.0

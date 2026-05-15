@@ -1,0 +1,18 @@
+# Streamlit configuration used by both local runs and Streamlit Community Cloud.
+# See https://docs.streamlit.io/library/advanced-features/configuration for all
+# available options.
+
+[theme]
+base = "dark"
+primaryColor = "#7afcff"
+backgroundColor = "#06090f"
+secondaryBackgroundColor = "#1c2735"
+textColor = "#dde6f1"
+font = "sans serif"
+
+[browser]
+gatherUsageStats = false
+
+[server]
+# Streamlit Cloud sets these itself; values here are for local parity.
+headless = true
