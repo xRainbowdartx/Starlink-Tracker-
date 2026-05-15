@@ -8,8 +8,17 @@ or via the CLI:
 
 from __future__ import annotations
 
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
+
+# Import spacetrack from the source tree, not from an installed wheel.
+# Streamlit Cloud's uv-based `pip install -e .` caches old builds by version
+# and serves stale code on subsequent deploys; loading from the repo root
+# guarantees we run the code that was just pulled.
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
 
 import streamlit as st
 

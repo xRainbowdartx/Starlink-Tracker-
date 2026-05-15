@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "spacetrack"
-version = "0.1.0"
+version = "0.1.1"
 description = "Track the Starlink constellation and detect orbital anomalies (conjunctions, maneuvers, proximity events, decay)."
 readme = "README.md"
 requires-python = ">=3.11"
