@@ -23,7 +23,7 @@ from spacetrack.propagate.sgp4_engine import propagate_many, propagate_track
 from spacetrack.storage import db
 from spacetrack.storage.queries import find_satellite, get_latest_tle
 from spacetrack.storage.snapshot import write_snapshots
-from spacetrack.tle.fetcher import fetch_starlink, now_unix
+from spacetrack.tle.fetcher import FetchError, fetch_starlink, now_unix
 from spacetrack.viz.globe3d import render_globe
 from spacetrack.viz.groundtrack import render_ground_track
 from spacetrack.viz.skyplot import HORIZON_DEG, PRACTICAL_DEG, render_sky
@@ -97,7 +97,15 @@ def bootstrap_catalog_if_empty() -> None:
         return
 
     with st.spinner("First run: fetching the current Starlink catalog from CelesTrak..."):
-        tles = fetch_starlink()
+        try:
+            tles = fetch_starlink()
+        except FetchError as exc:
+            st.error(
+                "Couldn't fetch the Starlink catalog from CelesTrak. "
+                "This is usually a transient network issue — try reloading in a minute.\n\n"
+                f"`{exc}`"
+            )
+            st.stop()
         with db.session(DB_PATH) as conn:
             write_snapshots(conn, tles, fetched_at=now_unix(), constellation="starlink")
     # Reset cached stats so the metrics strip reflects the new data.
