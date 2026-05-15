@@ -26,8 +26,9 @@ env/
 htmlcov/
 coverage.xml
 
-# Project data
-data/
+# Project data (top-level SQLite DB and friends; NOT spacetrack/data/ which
+# holds the bundled fallback TLE seed shipped with the package).
+/data/
 *.db
 *.sqlite
 *.sqlite3

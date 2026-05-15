@@ -49,6 +49,7 @@ include = ["spacetrack*"]
 
 [tool.setuptools.package-data]
 "spacetrack.viz" = ["assets/*.geojson", "assets/*.json"]
+"spacetrack.data" = ["*.tle"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

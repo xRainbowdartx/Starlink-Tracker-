@@ -23,7 +23,12 @@ from spacetrack.propagate.sgp4_engine import propagate_many, propagate_track
 from spacetrack.storage import db
 from spacetrack.storage.queries import find_satellite, get_latest_tle
 from spacetrack.storage.snapshot import write_snapshots
-from spacetrack.tle.fetcher import FetchError, fetch_starlink, now_unix
+from spacetrack.tle.fetcher import (
+    FetchError,
+    fetch_starlink,
+    load_bundled_seed,
+    now_unix,
+)
 from spacetrack.viz.globe3d import render_globe
 from spacetrack.viz.groundtrack import render_ground_track
 from spacetrack.viz.skyplot import HORIZON_DEG, PRACTICAL_DEG, render_sky
@@ -100,12 +105,21 @@ def bootstrap_catalog_if_empty() -> None:
         try:
             tles = fetch_starlink()
         except FetchError as exc:
-            st.error(
-                "Couldn't fetch the Starlink catalog from CelesTrak. "
-                "This is usually a transient network issue — try reloading in a minute.\n\n"
-                f"`{exc}`"
-            )
-            st.stop()
+            # Some hosts (e.g. Streamlit Cloud egress) can't reach CelesTrak.
+            # Fall back to the bundled seed snapshot so the demo still works.
+            try:
+                tles = load_bundled_seed()
+                st.warning(
+                    "CelesTrak is unreachable from this host — showing a bundled "
+                    "snapshot instead. Positions are propagated from the most recent "
+                    "TLEs committed to the repo.",
+                )
+            except Exception as seed_exc:
+                st.error(
+                    f"Couldn't fetch live data and the bundled seed failed to load.\n\n"
+                    f"`{exc}`\n\n`{seed_exc}`"
+                )
+                st.stop()
         with db.session(DB_PATH) as conn:
             write_snapshots(conn, tles, fetched_at=now_unix(), constellation="starlink")
     # Reset cached stats so the metrics strip reflects the new data.

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import time
+from importlib.resources import files
 
 import requests
 
@@ -68,6 +69,20 @@ def fetch_starlink(*, timeout: float = 30.0) -> list[ParsedTLE]:
     raw = fetch_group("starlink", timeout=timeout)
     parsed = parse_block(raw)
     log.info("Parsed %d Starlink TLEs", len(parsed))
+    return parsed
+
+
+def load_bundled_seed() -> list[ParsedTLE]:
+    """Return the bundled Starlink TLE snapshot.
+
+    Used as a last-resort fallback for environments that can't reach
+    CelesTrak (e.g. Streamlit Cloud's egress IPs). The snapshot is
+    refreshed by re-running `spacetrack update` locally and re-extracting
+    the seed file.
+    """
+    raw = files("spacetrack.data").joinpath("starlink_seed.tle").read_text(encoding="utf-8")
+    parsed = parse_block(raw)
+    log.info("Loaded %d Starlink TLEs from bundled seed", len(parsed))
     return parsed
 
 
