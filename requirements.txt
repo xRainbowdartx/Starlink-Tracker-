@@ -7,3 +7,6 @@ requests>=2.32
 plotly>=5.20
 streamlit>=1.32
 mapbox-earcut>=1.0
+# Install the local spacetrack package itself so `from spacetrack...`
+# imports resolve on Streamlit Cloud (which only reads requirements.txt).
+-e .
