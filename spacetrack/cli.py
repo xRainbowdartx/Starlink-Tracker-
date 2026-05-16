@@ -26,7 +26,7 @@ from spacetrack.propagate.sgp4_engine import (
 from spacetrack.storage import db
 from spacetrack.storage.queries import find_satellite, get_latest_tle
 from spacetrack.storage.snapshot import write_snapshots
-from spacetrack.tle.fetcher import fetch_starlink, now_unix
+from spacetrack.tle.fetcher import NoNewData, fetch_starlink, now_unix
 
 DEFAULT_DB = Path("data/spacetrack.db")
 
@@ -74,6 +74,9 @@ def update(ctx: click.Context) -> None:
 
     try:
         tles = fetch_starlink()
+    except NoNewData as exc:
+        click.echo(str(exc))
+        return
     except Exception as exc:
         click.echo(f"error: {exc}", err=True)
         sys.exit(1)

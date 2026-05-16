@@ -24,6 +24,11 @@ class FetchError(RuntimeError):
     pass
 
 
+class NoNewData(Exception):
+    """CelesTrak 403: data unchanged since last download."""
+    pass
+
+
 def fetch_group(
     group: str = "starlink",
     *,
@@ -36,7 +41,7 @@ def fetch_group(
 
     last_exc: Exception | None = None
     for attempt in range(1, retries + 1):
-        log.info("Fetching CelesTrak group=%s (attempt %d/%d)", group, attempt, retries)
+        log.debug("Fetching CelesTrak group=%s (attempt %d/%d)", group, attempt, retries)
         try:
             resp = requests.get(
                 CELESTRAK_GP_URL, params=params, headers=headers, timeout=timeout
@@ -48,6 +53,15 @@ def fetch_group(
                 time.sleep(backoff * attempt)
                 continue
             raise FetchError(f"network error fetching {group}: {exc}") from exc
+
+        if resp.status_code == 403:
+            # CelesTrak returns 403 when data hasn't changed since last download.
+            if "has not updated since" in resp.text:
+                import re
+                m = re.search(r"at (\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} UTC)", resp.text)
+                since = m.group(1) if m else "recently"
+                raise NoNewData(f"Catalog already current as of {since}. CelesTrak updates every 2 hours.")
+            raise FetchError(f"CelesTrak returned HTTP 403")
 
         if resp.status_code != 200:
             if resp.status_code in (429, 502, 503, 504) and attempt < retries:
