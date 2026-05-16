@@ -8,13 +8,14 @@ suspicious proximity events, and orbital decay.
 
 ## Live demo
 
-Once `spacetrack update` has been run at least once and the dashboard is
-launched with `spacetrack dashboard`, the web UI is available at:
+**[https://starlink-watch.streamlit.app](https://starlink-watch.streamlit.app)**
+
+Public deployment on Streamlit Cloud — no install required. Data is
+propagated from the most recent TLE snapshot.
+
+To run locally, launch with `spacetrack dashboard` and open:
 
 **[http://localhost:8501](http://localhost:8501)**
-
-(localhost — only reachable from this machine while the dashboard process is
-running. Stop it with Ctrl+C in the terminal that started it.)
 
 ## Quickstart
 
