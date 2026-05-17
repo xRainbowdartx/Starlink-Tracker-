@@ -33,11 +33,13 @@ dev = [
 viz = [
     "plotly>=5.20",
     "mapbox-earcut>=1.0",
+    "pydeck>=0.9",
 ]
 dashboard = [
     "plotly>=5.20",
     "streamlit>=1.32",
     "mapbox-earcut>=1.0",
+    "pydeck>=0.9",
 ]
 
 [project.scripts]

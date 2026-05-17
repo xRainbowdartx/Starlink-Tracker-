@@ -38,7 +38,9 @@ from spacetrack.tle.fetcher import (
     load_bundled_seed,
     now_unix,
 )
+from spacetrack.anomaly import decay as decay_mod
 from spacetrack.viz.globe3d import render_globe
+from spacetrack.viz.globe_deck import render_globe_deck
 from spacetrack.viz.groundtrack import render_ground_track
 from spacetrack.viz.skyplot import HORIZON_DEG, PRACTICAL_DEG, render_sky
 
@@ -148,6 +150,62 @@ def cached_globe_positions(limit: int, bucket_minute: int):
     tles = load_all_tles()[:limit]
     when = datetime.now(timezone.utc)
     return propagate_many(tles, when=when)
+
+
+@st.cache_data(ttl=DATA_CACHE_SECONDS, show_spinner=False)
+def cached_risk_map(bucket_minute: int) -> dict[int, str]:
+    """Run a full-constellation decay scan, cached per minute bucket."""
+    del bucket_minute
+    if not DB_PATH.exists():
+        return {}
+    with db.session(DB_PATH) as conn:
+        flagged = decay_mod.scan(conn, min_risk="elevated")
+    return {a.norad_id: a.risk for a in flagged}
+
+
+@st.cache_data(ttl=DATA_CACHE_SECONDS, show_spinner=False)
+def cached_flagged_assessments(bucket_minute: int) -> list[dict]:
+    """Decay scan results as plain dicts (cache-safe + table-ready)."""
+    del bucket_minute
+    if not DB_PATH.exists():
+        return []
+    with db.session(DB_PATH) as conn:
+        flagged = decay_mod.scan(conn, min_risk="elevated")
+    return [
+        {
+            "risk": a.risk,
+            "norad_id": a.norad_id,
+            "name": a.name,
+            "perigee_km": round(a.perigee_km, 1),
+            "apogee_km": round(a.apogee_km, 1),
+            "altitude_km": round(a.altitude_km, 1),
+            "decay_rate_km_per_day": (
+                round(a.decay_rate_km_per_day, 3)
+                if a.decay_rate_km_per_day is not None else None
+            ),
+            "days_to_reentry": (
+                round(a.days_to_reentry, 1)
+                if a.days_to_reentry is not None else None
+            ),
+        }
+        for a in flagged
+    ]
+
+
+@st.cache_data(ttl=DATA_CACHE_SECONDS, show_spinner=False)
+def cached_time_frames(limit: int, frames: int, step_min: float, bucket_minute: int):
+    """Propagate the constellation at N future instants for animation."""
+    del bucket_minute
+    from datetime import timedelta
+    tles = load_all_tles()[:limit]
+    start = datetime.now(timezone.utc)
+    return [
+        (
+            (start + timedelta(minutes=step_min * i)).strftime("%H:%M"),
+            propagate_many(tles, when=start + timedelta(minutes=step_min * i)),
+        )
+        for i in range(frames)
+    ]
 
 
 def find_named_sat(name_substring: str) -> tuple[int, str, str, str] | None:
@@ -272,21 +330,134 @@ sat_query = st.sidebar.text_input(
 # Tabs — globe / observer / track
 # ---------------------------------------------------------------------------
 
-tab_globe, tab_observer, tab_track = st.tabs([
+tab_globe, tab_decay, tab_bluemarble, tab_observer, tab_track = st.tabs([
     "Constellation",
+    "Decay Watch",
+    "Blue Marble (deck.gl)",
     "Observer · Sky plot",
     "Ground track",
 ])
 
 now = datetime.now(timezone.utc)
+minute_bucket = int(now.timestamp() // 60)
 
 with tab_globe:
     st.subheader(f"Starlink positions around {now.strftime('%H:%M UTC')}")
-    minute_bucket = int(now.timestamp() // 60)
-    with st.spinner(f"Propagating {globe_limit:,} satellites..."):
-        positions = cached_globe_positions(globe_limit, minute_bucket)
-    fig = render_globe(positions)
+
+    g1, g2, g3, g4 = st.columns([1.2, 1.0, 1.0, 1.0])
+    color_by = g1.radio(
+        "Color by", ["Altitude", "Decay risk"], horizontal=True,
+        help="'Decay risk' overlays the Phase 3 anomaly detector.",
+    )
+    pulse_on = g2.checkbox(
+        "Pulse imminent", value=True,
+        disabled=color_by != "Decay risk",
+        help="Throb imminent-risk markers (only with Decay risk coloring).",
+    )
+    animate_on = g3.checkbox(
+        "Time slider", value=False,
+        help="Propagate at N future instants. Heavier — render time scales with frames.",
+    )
+    thin_n = g4.slider(
+        "Thin nominal sats", 1, 10, 4,
+        help="Keep every Nth nominal-tier sat. Flagged sats always rendered.",
+    )
+
+    risk_map: dict[int, str] | None = None
+    if color_by == "Decay risk":
+        with st.spinner("Scanning constellation for decay risk..."):
+            risk_map = cached_risk_map(minute_bucket)
+
+    if animate_on:
+        n_frames = st.slider("Animation frames", 3, 18, 9)
+        step_min = st.slider("Minutes per frame", 5.0, 60.0, 15.0, step=5.0)
+        with st.spinner(f"Propagating {n_frames} frames..."):
+            time_frames = cached_time_frames(globe_limit, n_frames, step_min, minute_bucket)
+        positions_now = time_frames[0][1]
+    else:
+        time_frames = None
+        with st.spinner(f"Propagating {globe_limit:,} satellites..."):
+            positions_now = cached_globe_positions(globe_limit, minute_bucket)
+
+    fig = render_globe(
+        positions_now,
+        risk_map=risk_map,
+        pulse=pulse_on and color_by == "Decay risk" and not animate_on,
+        time_frames=time_frames,
+        thin_nominal=thin_n,
+    )
     st.plotly_chart(fig, width="stretch", height=720)
+
+with tab_decay:
+    st.subheader("Re-entry risk watch")
+    st.caption(
+        "Per-satellite decay assessment from the latest TLE mean motion. "
+        "Risk tiers: **imminent** (perigee < 200 km) · **high** (< 300 km or "
+        "−5 km/day) · **elevated** (< 450 km or −1 km/day). "
+        "ETA assumes the current decay rate holds until 120 km."
+    )
+
+    with st.spinner("Running decay scan..."):
+        risk_map_d = cached_risk_map(minute_bucket)
+        flagged_rows = cached_flagged_assessments(minute_bucket)
+
+    if not flagged_rows:
+        st.info("No satellites flagged. Either everything's nominal or the DB is empty.")
+    else:
+        counts = {"imminent": 0, "high": 0, "elevated": 0}
+        for r in flagged_rows:
+            counts[r["risk"]] = counts.get(r["risk"], 0) + 1
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Flagged total", f"{len(flagged_rows):,}")
+        c2.metric("Imminent", counts.get("imminent", 0))
+        c3.metric("High", counts.get("high", 0))
+        c4.metric("Elevated", counts.get("elevated", 0))
+
+        with st.spinner(f"Propagating {globe_limit:,} satellites..."):
+            positions_now = cached_globe_positions(globe_limit, minute_bucket)
+        fig_d = render_globe(
+            positions_now, risk_map=risk_map_d, pulse=True, thin_nominal=4,
+        )
+        st.plotly_chart(fig_d, width="stretch", height=620)
+
+        st.markdown("**Flagged satellites (sorted highest risk first):**")
+        st.dataframe(
+            flagged_rows,
+            width="stretch",
+            hide_index=True,
+            column_config={
+                "risk": st.column_config.TextColumn("Risk"),
+                "norad_id": st.column_config.NumberColumn("NORAD", format="%d"),
+                "name": st.column_config.TextColumn("Name"),
+                "perigee_km": st.column_config.NumberColumn("Perigee (km)", format="%.1f"),
+                "apogee_km": st.column_config.NumberColumn("Apogee (km)", format="%.1f"),
+                "altitude_km": st.column_config.NumberColumn("Mean alt (km)", format="%.1f"),
+                "decay_rate_km_per_day": st.column_config.NumberColumn(
+                    "dh/dt (km/day)", format="%+.2f",
+                ),
+                "days_to_reentry": st.column_config.NumberColumn(
+                    "ETA re-entry (days)", format="%.1f",
+                ),
+            },
+        )
+
+with tab_bluemarble:
+    st.subheader("GPU globe — NASA Blue Marble")
+    st.caption(
+        "deck.gl GlobeView with a photorealistic Earth backdrop. "
+        "GPU-rendered — smooth rotation even at full constellation scale. "
+        "Markers color-coded by decay risk; hover for details."
+    )
+    with st.spinner(f"Propagating {globe_limit:,} satellites..."):
+        positions_bm = cached_globe_positions(globe_limit, minute_bucket)
+        risk_map_bm = cached_risk_map(minute_bucket)
+    deck = render_globe_deck(positions_bm, risk_map=risk_map_bm)
+    st.pydeck_chart(deck, height=720)
+    st.caption(
+        "Earth texture is loaded from NASA's `eoimages.gsfc.nasa.gov`. "
+        "If you see a dark globe with only dots, the image is still loading "
+        "or the CDN is blocked from your network."
+    )
 
 with tab_observer:
     resolved = find_named_sat(sat_query)

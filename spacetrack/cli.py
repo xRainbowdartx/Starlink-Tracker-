@@ -11,6 +11,7 @@ from pathlib import Path
 import click
 
 from spacetrack import __version__
+from spacetrack.anomaly import decay as decay_mod
 from spacetrack.live import live_sample
 from spacetrack.observer.visibility import (
     ObserverLocation,
@@ -178,12 +179,28 @@ def where(ctx: click.Context, identifier: str, when_str: str | None) -> None:
               help="ISO-8601 UTC time (default: now)")
 @click.option("--limit", type=int, default=None,
               help="Only render the first N satellites (debug aid)")
+@click.option("--color-by", type=click.Choice(["altitude", "risk"]), default="altitude",
+              help="Marker coloring: 'altitude' (default) or 'risk' (decay tiers).")
+@click.option("--pulse", is_flag=True,
+              help="Pulse imminent markers (requires --color-by risk).")
+@click.option("--animate", is_flag=True,
+              help="Add a time slider stepping through future positions.")
+@click.option("--frames", type=int, default=9,
+              help="Number of slider frames when --animate is set (default: 9).")
+@click.option("--step-min", type=float, default=15.0,
+              help="Minutes between frames when --animate is set (default: 15).")
+@click.option("--thin", type=int, default=1,
+              help="Keep every Nth nominal-tier sat to speed up rotation "
+                   "(flagged sats always kept; default 1 = no thinning).")
 @click.option("--open", "open_in_browser", is_flag=True,
               help="Open the rendered HTML in your default browser")
 @click.pass_context
 def globe(ctx: click.Context, output: Path, when_str: str | None,
-          limit: int | None, open_in_browser: bool) -> None:
+          limit: int | None, color_by: str, pulse: bool,
+          animate: bool, frames: int, step_min: float, thin: int,
+          open_in_browser: bool) -> None:
     """Render all tracked Starlink satellites on a 3D Earth (HTML output)."""
+    from datetime import timedelta
     from spacetrack.viz.globe3d import render_globe
 
     db_path: Path = ctx.obj["db_path"]
@@ -192,7 +209,7 @@ def globe(ctx: click.Context, output: Path, when_str: str | None,
     with db.session(db_path) as conn:
         rows = conn.execute(
             """
-            SELECT s.name, t.line1, t.line2
+            SELECT s.norad_id, s.name, t.line1, t.line2
             FROM satellites s
             JOIN tle_snapshots t ON t.norad_id = s.norad_id
             WHERE s.constellation = 'starlink'
@@ -201,6 +218,10 @@ def globe(ctx: click.Context, output: Path, when_str: str | None,
               )
             """
         ).fetchall()
+        risk_map: dict[int, str] | None = None
+        if color_by == "risk":
+            scan = decay_mod.scan(conn, min_risk="elevated")
+            risk_map = {a.norad_id: a.risk for a in scan}
 
     tles = [(r["name"], r["line1"], r["line2"]) for r in rows]
     if limit is not None:
@@ -211,9 +232,25 @@ def globe(ctx: click.Context, output: Path, when_str: str | None,
 
     click.echo(f"Propagating {len(tles)} satellites to {when.isoformat()}...")
     positions = propagate_many(tles, when=when)
-    click.echo(f"Rendering {len(positions)} positions to {output}...")
 
-    fig = render_globe(positions)
+    time_frames = None
+    if animate:
+        click.echo(f"Building {frames} animation frames at {step_min:.0f}-min intervals...")
+        time_frames = []
+        for i in range(frames):
+            t = when + timedelta(minutes=step_min * i)
+            frame_positions = propagate_many(tles, when=t)
+            label = t.strftime("%H:%M")
+            time_frames.append((label, frame_positions))
+
+    click.echo(f"Rendering to {output}...")
+    fig = render_globe(
+        positions,
+        risk_map=risk_map,
+        pulse=pulse,
+        time_frames=time_frames,
+        thin_nominal=thin,
+    )
     fig.write_html(str(output), include_plotlyjs="cdn", auto_open=False)
     click.echo(f"Wrote {output}")
     if open_in_browser:
@@ -417,6 +454,66 @@ def live(
         click.echo("\nStopped.")
 
 
+@main.command("globe-deck")
+@click.option("--output", "-o", type=click.Path(path_type=Path),
+              default=Path("globe-deck.html"),
+              help="Output HTML file (default: globe-deck.html)")
+@click.option("--at", "when_str", default=None,
+              help="ISO-8601 UTC time (default: now)")
+@click.option("--limit", type=int, default=None,
+              help="Only render the first N satellites (debug aid)")
+@click.option("--color-by", type=click.Choice(["altitude", "risk"]), default="risk",
+              help="Marker coloring: 'risk' (default) or 'altitude' (not yet wired).")
+@click.option("--open", "open_in_browser", is_flag=True,
+              help="Open the rendered HTML in your default browser")
+@click.pass_context
+def globe_deck(ctx: click.Context, output: Path, when_str: str | None,
+               limit: int | None, color_by: str, open_in_browser: bool) -> None:
+    """Render the constellation on a deck.gl GlobeView with NASA Blue Marble.
+
+    GPU-accelerated; smoother than the Plotly globe at full constellation
+    scale. Real photographic Earth backdrop via NASA Blue Marble bitmap.
+    """
+    from spacetrack.viz.globe_deck import render_globe_deck
+
+    db_path: Path = ctx.obj["db_path"]
+    when = _parse_when(when_str)
+
+    with db.session(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT s.norad_id, s.name, t.line1, t.line2
+            FROM satellites s
+            JOIN tle_snapshots t ON t.norad_id = s.norad_id
+            WHERE s.constellation = 'starlink'
+              AND t.epoch = (
+                  SELECT MAX(epoch) FROM tle_snapshots WHERE norad_id = s.norad_id
+              )
+            """
+        ).fetchall()
+        risk_map: dict[int, str] | None = None
+        if color_by == "risk":
+            scan = decay_mod.scan(conn, min_risk="elevated")
+            risk_map = {a.norad_id: a.risk for a in scan}
+
+    tles = [(r["name"], r["line1"], r["line2"]) for r in rows]
+    if limit is not None:
+        tles = tles[:limit]
+    if not tles:
+        click.echo("error: no Starlink TLEs in DB. Run `spacetrack update` first.", err=True)
+        sys.exit(1)
+
+    click.echo(f"Propagating {len(tles)} satellites to {when.isoformat()}...")
+    positions = propagate_many(tles, when=when)
+    click.echo(f"Rendering deck.gl globe to {output}...")
+    deck = render_globe_deck(positions, risk_map=risk_map)
+    deck.to_html(str(output), notebook_display=False)
+    click.echo(f"Wrote {output}")
+    if open_in_browser:
+        import webbrowser
+        webbrowser.open(output.resolve().as_uri())
+
+
 @main.command()
 @click.option("--port", type=int, default=8501, help="Streamlit port (default: 8501)")
 @click.option("--host", default="localhost", help="Host to bind (default: localhost)")
@@ -446,6 +543,104 @@ def dashboard(port: int, host: str) -> None:
         )
     except KeyboardInterrupt:
         click.echo("\nDashboard stopped.")
+
+
+_RISK_SYMBOL = {
+    "nominal": "·",
+    "elevated": "!",
+    "high": "!!",
+    "imminent": "!!!",
+}
+
+
+def _format_assessment(a: decay_mod.DecayAssessment) -> str:
+    lines = [
+        f"{a.name} (NORAD {a.norad_id})  [{a.risk.upper()}]",
+        f"  epoch (JD):     {a.epoch:.5f}",
+        f"  mean motion:    {a.mean_motion:.6f} rev/day",
+        f"  eccentricity:   {a.eccentricity:.6f}",
+        f"  semi-major:     {a.semi_major_axis_km:7.1f} km",
+        f"  perigee × apogee: {a.perigee_km:7.1f} × {a.apogee_km:7.1f} km",
+        f"  mean altitude:  {a.altitude_km:7.1f} km",
+    ]
+    if a.decay_rate_km_per_day is not None:
+        lines.append(f"  decay rate:     {a.decay_rate_km_per_day:+.3f} km/day")
+    else:
+        lines.append("  decay rate:     (needs ≥2 snapshots)")
+    if a.days_to_reentry is not None:
+        lines.append(f"  ETA re-entry:   ~{a.days_to_reentry:.1f} days (rough)")
+    return "\n".join(lines)
+
+
+@main.command()
+@click.argument("identifier", required=False)
+@click.option("--scan", is_flag=True,
+              help="Scan the whole tracked constellation and list flagged sats.")
+@click.option("--min-risk",
+              type=click.Choice(["nominal", "elevated", "high", "imminent"]),
+              default="elevated",
+              help="Minimum risk to report under --scan (default: elevated).")
+@click.option("--limit", type=int, default=None,
+              help="Cap on --scan results (default: unlimited).")
+@click.pass_context
+def decay(
+    ctx: click.Context,
+    identifier: str | None,
+    scan: bool,
+    min_risk: str,
+    limit: int | None,
+) -> None:
+    """Assess re-entry risk from TLE mean motion.
+
+    Without --scan, IDENTIFIER must be a NORAD ID or satellite name and the
+    command prints a single assessment. With --scan, IDENTIFIER is ignored
+    and every tracked Starlink sat is evaluated.
+    """
+    db_path: Path = ctx.obj["db_path"]
+
+    if scan:
+        with db.session(db_path) as conn:
+            flagged = decay_mod.scan(conn, min_risk=min_risk)  # type: ignore[arg-type]
+        if not flagged:
+            click.echo(f"No satellites at risk >= {min_risk}.")
+            return
+        shown = flagged[:limit] if limit else flagged
+        click.echo(
+            f"{len(flagged)} satellite(s) at risk >= {min_risk}"
+            + (f" (showing first {len(shown)})" if limit and len(shown) < len(flagged) else "")
+            + ":"
+        )
+        click.echo(
+            f"  {'RISK':<9} {'NORAD':>6}  {'NAME':<20} "
+            f"{'PERI(km)':>9} {'APO(km)':>9} {'dh/dt':>9}"
+        )
+        for a in shown:
+            rate = (
+                f"{a.decay_rate_km_per_day:+7.2f}"
+                if a.decay_rate_km_per_day is not None
+                else "    n/a"
+            )
+            click.echo(
+                f"  {a.risk:<9} {a.norad_id:>6}  {a.name:<20} "
+                f"{a.perigee_km:>9.1f} {a.apogee_km:>9.1f} {rate:>9}"
+            )
+        return
+
+    if not identifier:
+        click.echo("error: provide IDENTIFIER or use --scan", err=True)
+        sys.exit(1)
+
+    with db.session(db_path) as conn:
+        norad_id = find_satellite(conn, identifier)
+        if norad_id is None:
+            click.echo(f"error: no satellite matches {identifier!r}.", err=True)
+            sys.exit(1)
+        assessment = decay_mod.assess_satellite(conn, norad_id)
+
+    if assessment is None:
+        click.echo(f"error: no TLE stored for NORAD {norad_id}", err=True)
+        sys.exit(1)
+    click.echo(_format_assessment(assessment))
 
 
 if __name__ == "__main__":
