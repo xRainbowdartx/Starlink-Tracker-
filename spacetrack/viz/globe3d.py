@@ -18,12 +18,14 @@ import plotly.graph_objects as go
 
 from spacetrack.propagate.sgp4_engine import SatPosition
 
-# Match the ground-track palette exactly so the two views feel like one tool.
-LAND_COLOR = "#1c2735"
-OCEAN_COLOR = "#06090f"
-COUNTRY_COLOR = "#2a3a4f"
-COASTLINE_COLOR = "#3a4a60"
-BG_COLOR = "#06090f"
+# Palantir-style flat palette — matches dashboard theme and globe_deck.py.
+LAND_COLOR = "#1c2533"      # matte slate landmass
+OCEAN_COLOR = "#0d1117"     # ocean = page background (seamless)
+COUNTRY_COLOR = "#2a3441"   # hairline borders
+COASTLINE_COLOR = "#3a4658" # slightly brighter for optional outlines
+BG_COLOR = "#0d1117"
+TEXT_COLOR = "#e1e7ef"
+SURFACE_COLOR = "#161d29"
 
 # Risk tier styling: gray nominal sats form a dim backdrop; flagged sats
 # step up in both size and saturation so they pop on the rotating globe.
@@ -277,9 +279,9 @@ def render_globe(
             direction="left",
             showactive=False,
             x=0.05, y=0.02, xanchor="left", yanchor="bottom",
-            bgcolor="rgba(6,9,15,0.7)",
-            bordercolor="#2a3a4f", borderwidth=1,
-            font=dict(color="#dde6f1"),
+            bgcolor="rgba(13,17,23,0.85)",
+            bordercolor=COUNTRY_COLOR, borderwidth=1,
+            font=dict(color=TEXT_COLOR),
             buttons=[
                 dict(label="▶ Play", method="animate", args=play_args),
                 dict(label="❚❚ Pause", method="animate", args=pause_args),
@@ -289,12 +291,12 @@ def render_globe(
     layout: dict = dict(
         title=title or default_title,
         paper_bgcolor=BG_COLOR,
-        font=dict(color="#dde6f1"),
+        font=dict(color=TEXT_COLOR),
         legend=dict(
-            bgcolor="rgba(6,9,15,0.7)",
-            bordercolor="#2a3a4f",
+            bgcolor="rgba(13,17,23,0.85)",
+            bordercolor=COUNTRY_COLOR,
             borderwidth=1,
-            font=dict(color="#dde6f1"),
+            font=dict(color=TEXT_COLOR),
         ),
         geo=dict(
             projection_type="orthographic",
@@ -319,11 +321,11 @@ def render_globe(
             active=0,
             x=0.18, y=0.02, len=0.78, xanchor="left", yanchor="bottom",
             pad=dict(b=10, t=10),
-            currentvalue=dict(prefix="time: ", font=dict(color="#dde6f1")),
-            bgcolor="#1c2735",
-            bordercolor="#2a3a4f",
-            tickcolor="#dde6f1",
-            font=dict(color="#dde6f1"),
+            currentvalue=dict(prefix="time: ", font=dict(color=TEXT_COLOR)),
+            bgcolor=SURFACE_COLOR,
+            bordercolor=COUNTRY_COLOR,
+            tickcolor=TEXT_COLOR,
+            font=dict(color=TEXT_COLOR),
             steps=slider_steps,
         )]
     fig.update_layout(**layout)
